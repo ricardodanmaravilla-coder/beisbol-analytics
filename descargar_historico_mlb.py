@@ -6,7 +6,7 @@ from datetime import datetime
 
 # --- CONFIGURACIÓN ---
 API_KEY = os.environ.get("API_SPORTS_KEY") # Asegúrate de tener tu API Key configurada
-BASE_URL = "https://v3.baseball.api-sports.io"
+BASE_URL = "v1.baseball.api-sports.io"
 HEADERS = {'x-apisports-key': API_KEY}
 MLB_ID = 1 # ID de la MLB en API-Sports
 TEMPORADAS = [2020, 2021, 2022, 2023, 2024, 2025] # Temporadas a descargar para el modelo ML y ELO
