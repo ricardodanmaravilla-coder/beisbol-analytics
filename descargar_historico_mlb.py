@@ -5,7 +5,7 @@ import time
 
 # --- CONFIGURACIÓN ---
 API_KEY = os.environ.get("API_SPORTS_KEY")
-BASE_URL = "https://v3.baseball.api-sports.io"
+BASE_URL = "https://v1.baseball.api-sports.io"
 HEADERS = {'x-apisports-key': API_KEY}
 MLB_ID = 1 
 TEMPORADAS = [2023, 2024, 2025] 
