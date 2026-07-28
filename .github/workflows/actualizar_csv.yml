@@ -1,0 +1,41 @@
+name: Actualizar CSV de MLB Diario
+
+on:
+  schedule:
+    # 15:00 UTC corresponde a las 09:00 AM Hora del Centro (CST)
+    - cron: '0 15 * * *'
+  workflow_dispatch: # Este parámetro te permite ejecutar el script manualmente desde GitHub cuando quieras con un botón
+
+jobs:
+  update-csv:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Otorga permisos al bot para modificar y guardar el repositorio
+
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar entorno de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar librerías necesarias
+        run: |
+          pip install requests pandas numpy
+
+      - name: Ejecutar motor de descarga
+        env:
+          # Inyecta tu API Key de forma segura
+          API_SPORTS_KEY: ${{ secrets.API_SPORTS_KEY }}
+        run: python descargar_historico_mlb.py
+
+      - name: Guardar los cambios (Commit y Push)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/historico_mlb.csv
+          # El comando '|| echo' evita que la acción falle si un día no hubo partidos nuevos que agregar
+          git commit -m "🤖 Automatización: Histórico de MLB actualizado" || echo "Sin cambios nuevos para guardar"
+          git push
