@@ -2,19 +2,8 @@ import os
 import pandas as pd
 import numpy as np
 
-# Promedios estándar MLB (utilizados como base si falta algún dato)
-PROMEDIOS_MLB = {
-    "carreras_por_juego": 4.50,
-    "hits_por_juego": 8.20,
-    "era_pitcher": 4.10,
-    "whip_pitcher": 1.28,
-    "k9_pitcher": 8.50,      # Ponches por cada 9 entradas
-    "k_pct_bateo": 0.22      # 22% de ponches por turno al bate
-}
-
 def cargar_datos_mlb():
-    """Carga el archivo histórico o base de datos de MLB desde GitHub RAW o local."""
-    url_raw = 'https://raw.githubusercontent.com/ricardodanmaravilla-coder/beisbol-analytics/main/data/historico_mlb.csv'
+    url_github_raw = 'https://raw.githubusercontent.com/ricardodanmaravilla-coder/beisbol-analytics/main/data/historico_mlb.csv'
     rutas_locales = ['data/historico_mlb.csv', 'historico_mlb.csv']
     
     df = None
@@ -28,56 +17,77 @@ def cargar_datos_mlb():
                 
     if df is None:
         try:
-            df = pd.read_csv(url_raw)
-        except Exception:
-            # DataFrame sintético/base si no existe aún el archivo histórico
-            df = pd.DataFrame()
-            
+            df = pd.read_csv(url_github_raw)
+        except Exception as e:
+            raise FileNotFoundError(f"Error cargando histórico MLB: {e}")
+
+    df['Fecha'] = pd.to_datetime(df['Fecha'])
+    fecha_referencia = df['Fecha'].max()
+    df['Dias_Antiguedad'] = (fecha_referencia - df['Fecha']).dt.days
+    df['Peso'] = 0.5 ** (df['Dias_Antiguedad'] / 365.0) # Mayor peso a juegos recientes
+    
     return df
 
-def calcular_expectativa_beisbol(local, visita, pitcher_local_stats=None, pitcher_visita_stats=None, df_historico=None):
-    """
-    Combina la efectividad del Pitcher Abridor vs. el Bateo Histórico del rival
-    para calcular los lambdas (Poisson) de Carreras, Hits y Ponches.
-    """
-    # 1. Estadísticas de Pitchers (Valores por defecto si no vienen de la API/DataFrame)
-    p_loc_era = pitcher_local_stats.get("era", PROMEDIOS_MLB["era_pitcher"]) if pitcher_local_stats else PROMEDIOS_MLB["era_pitcher"]
-    p_loc_k9 = pitcher_local_stats.get("k9", PROMEDIOS_MLB["k9_pitcher"]) if pitcher_local_stats else PROMEDIOS_MLB["k9_pitcher"]
-    p_loc_whip = pitcher_local_stats.get("whip", PROMEDIOS_MLB["whip_pitcher"]) if pitcher_local_stats else PROMEDIOS_MLB["whip_pitcher"]
+def media_ponderada(valores, pesos):
+    df_temp = pd.DataFrame({'val': valores, 'peso': pesos}).dropna()
+    if len(df_temp) == 0 or df_temp['peso'].sum() == 0: return 0
+    return np.average(df_temp['val'], weights=df_temp['peso'])
 
-    p_vis_era = pitcher_visita_stats.get("era", PROMEDIOS_MLB["era_pitcher"]) if pitcher_visita_stats else PROMEDIOS_MLB["era_pitcher"]
-    p_vis_k9 = pitcher_visita_stats.get("k9", PROMEDIOS_MLB["k9_pitcher"]) if pitcher_visita_stats else PROMEDIOS_MLB["k9_pitcher"]
-    p_vis_whip = pitcher_visita_stats.get("whip", PROMEDIOS_MLB["whip_pitcher"]) if pitcher_visita_stats else PROMEDIOS_MLB["whip_pitcher"]
-
-    # 2. Factores de Bateo por Equipo
-    carreras_base_local = PROMEDIOS_MLB["carreras_por_juego"]
-    carreras_base_visita = PROMEDIOS_MLB["carreras_por_juego"]
+def calcular_ratings_mlb(df):
+    pesos = df['Peso']
+    media_c_loc = media_ponderada(df['Carreras_Local'], pesos)
+    media_c_vis = media_ponderada(df['Carreras_Visita'], pesos)
+    media_h_loc = media_ponderada(df['Hits_Local'], pesos)
+    media_h_vis = media_ponderada(df['Hits_Visita'], pesos)
     
-    hits_base_local = PROMEDIOS_MLB["hits_por_juego"]
-    hits_base_visita = PROMEDIOS_MLB["hits_por_juego"]
+    return media_c_loc, media_c_vis, media_h_loc, media_h_vis
 
-    # Cruce: Bateo Local vs Pitcher Visitante
-    factor_era_visita = p_vis_era / PROMEDIOS_MLB["era_pitcher"]
-    lambda_carreras_local = carreras_base_local * factor_era_visita * 1.03  # 3% ventaja localía
+def obtener_fuerza_equipo(df, equipo, promedios_liga):
+    df_local = df[df['Local'] == equipo]
+    df_visita = df[df['Visitante'] == equipo]
     
-    # Cruce: Bateo Visitante vs Pitcher Local
-    factor_era_local = p_loc_era / PROMEDIOS_MLB["era_pitcher"]
-    lambda_carreras_visita = carreras_base_visita * factor_era_local
+    if len(df_local) == 0 or len(df_visita) == 0:
+        return None
 
-    # Expectativa de Hits (Función del WHIP del Pitcher)
-    lambda_hits_local = hits_base_local * (p_vis_whip / PROMEDIOS_MLB["whip_pitcher"])
-    lambda_hits_visita = hits_base_visita * (p_loc_whip / PROMEDIOS_MLB["whip_pitcher"])
+    m_c_l, m_c_v, m_h_l, m_h_v = promedios_liga
 
-    # Expectativa de Ponches (Ks) del Pitcher (Asumiendo 5.2 innings promedio de trabajo)
-    innings_estimados = 5.2
-    lambda_ponches_p_local = (p_loc_k9 / 9.0) * innings_estimados
-    lambda_ponches_p_visita = (p_vis_k9 / 9.0) * innings_estimados
+    # Fuerza Ofensiva y Defensiva en Carreras
+    att_carreras_loc = media_ponderada(df_local['Carreras_Local'], df_local['Peso']) / m_c_l
+    def_carreras_loc = media_ponderada(df_local['Carreras_Visita'], df_local['Peso']) / m_c_v
+    att_carreras_vis = media_ponderada(df_visita['Carreras_Visita'], df_visita['Peso']) / m_c_v
+    def_carreras_vis = media_ponderada(df_visita['Carreras_Local'], df_visita['Peso']) / m_c_l
+
+    # Fuerza Ofensiva y Defensiva en Hits
+    att_hits_loc = media_ponderada(df_local['Hits_Local'], df_local['Peso']) / m_h_l
+    def_hits_loc = media_ponderada(df_local['Hits_Visita'], df_local['Peso']) / m_h_v
+    att_hits_vis = media_ponderada(df_visita['Hits_Visita'], df_visita['Peso']) / m_h_v
+    def_hits_vis = media_ponderada(df_visita['Hits_Local'], df_visita['Peso']) / m_h_l
 
     return {
-        "lambda_carreras_local": max(0.5, lambda_carreras_local),
-        "lambda_carreras_visita": max(0.5, lambda_carreras_visita),
-        "lambda_hits_local": max(1.0, lambda_hits_local),
-        "lambda_hits_visita": max(1.0, lambda_hits_visita),
-        "lambda_ponches_p_local": max(1.0, lambda_ponches_p_local),
-        "lambda_ponches_p_visita": max(1.0, lambda_ponches_p_visita)
+        "Att_Carreras_L": att_carreras_loc, "Def_Carreras_L": def_carreras_loc,
+        "Att_Carreras_V": att_carreras_vis, "Def_Carreras_V": def_carreras_vis,
+        "Att_Hits_L": att_hits_loc, "Def_Hits_L": def_hits_loc,
+        "Att_Hits_V": att_hits_vis, "Def_Hits_V": def_hits_vis
+    }
+
+def calcular_expectativa_mlb(local, visita, df_historico):
+    promedios = calcular_ratings_mlb(df_historico)
+    stats_l = obtener_fuerza_equipo(df_historico, local, promedios)
+    stats_v = obtener_fuerza_equipo(df_historico, visita, promedios)
+    
+    if stats_l is None or stats_v is None:
+        raise ValueError(f"Faltan datos históricos reales para {local} o {visita}.")
+    
+    # Lambda = Ataque Local * Defensa Visita * Promedio Liga
+    lambda_carreras_l = stats_l["Att_Carreras_L"] * stats_v["Def_Carreras_V"] * promedios[0]
+    lambda_carreras_v = stats_v["Att_Carreras_V"] * stats_l["Def_Carreras_L"] * promedios[1]
+    
+    lambda_hits_l = stats_l["Att_Hits_L"] * stats_v["Def_Hits_V"] * promedios[2]
+    lambda_hits_v = stats_v["Att_Hits_V"] * stats_l["Def_Hits_L"] * promedios[3]
+
+    return {
+        "lambda_carreras_local": max(0.5, lambda_carreras_l),
+        "lambda_carreras_visita": max(0.5, lambda_carreras_v),
+        "lambda_hits_local": max(1.0, lambda_hits_l),
+        "lambda_hits_visita": max(1.0, lambda_hits_v)
     }
